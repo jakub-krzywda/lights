@@ -7,6 +7,7 @@ Uruchamiane lokalnie na Raspberry Pi, wymaga zainstalowanego ola-python
 
 import argparse
 import colorsys
+import queue
 import sys
 import threading
 from array import array
@@ -22,15 +23,44 @@ SEGMENT_CHANNELS = 3
 
 
 class DmxController:
+    """OLA's ClientWrapper/SelectServer is bound to the thread that creates it and
+    asserts on every Run() call from any other thread. Since effects and web
+    requests each run on their own thread, all sends are funneled through a single
+    dedicated worker thread that owns the ClientWrapper for its whole lifetime."""
+
     def __init__(self, universe=DEFAULT_UNIVERSE,
                  start_channel=DEFAULT_START_CHANNEL,
                  num_channels=DEFAULT_NUM_CHANNELS):
         self.universe = universe
         self.start_channel = start_channel
         self.num_channels = num_channels
-        self.wrapper = ClientWrapper()
-        self.client = self.wrapper.Client()
-        self._lock = threading.Lock()
+        self._queue: queue.Queue = queue.Queue()
+        ready = threading.Event()
+        self._worker = threading.Thread(target=self._run, args=(ready,), daemon=True)
+        self._worker.start()
+        ready.wait()
+
+    def _run(self, ready: threading.Event) -> None:
+        wrapper = ClientWrapper()
+        client = wrapper.Client()
+        ready.set()
+        while True:
+            channels, done, errors = self._queue.get()
+
+            data = array('B', [0] * max(channels))
+            for channel, value in channels.items():
+                data[channel - 1] = value
+
+            def on_sent(status):
+                wrapper.Stop()
+
+            try:
+                client.SendDmx(self.universe, data, on_sent)
+                wrapper.Run()
+            except Exception as e:
+                errors.append(e)
+            finally:
+                done.set()
 
     def send_dmx(self, channels: dict[int, int]) -> None:
         """Wysyła {kanał (1-indexed): wartość 0-255} do uniwersum."""
@@ -40,16 +70,12 @@ class DmxController:
             if not 0 <= value <= 255:
                 raise ValueError(f"wartość poza zakresem 0-255: {value}")
 
-        data = array('B', [0] * max(channels))
-        for channel, value in channels.items():
-            data[channel - 1] = value
-
-        def on_sent(status):
-            self.wrapper.Stop()
-
-        with self._lock:
-            self.client.SendDmx(self.universe, data, on_sent)
-            self.wrapper.Run()
+        done = threading.Event()
+        errors: list[Exception] = []
+        self._queue.put((channels, done, errors))
+        done.wait()
+        if errors:
+            raise errors[0]
 
     def set_color(self, r: int, g: int, b: int) -> None:
         """Ustawia jeden kolor na wszystkich segmentach fixture (1 segment w trybie 3ch, 8 w trybie 24ch)."""
@@ -135,7 +161,7 @@ def parse_channel_assignments(assignments: list[str]) -> dict[int, int]:
 
 def run_interactive(controller: DmxController) -> None:
     print("Tryb interaktywny. Komendy: 'color R G B', 'segment N R G B', 'raw CH=VAL ...', "
-          f"'effect {'|'.join(EFFECTS)} [R G B]', 'stop', 'blackout', 'exit'.")
+          f"'effect {'|'.join(EFFECTS)} [R G B] [SPEED]', 'stop', 'blackout', 'exit'.")
     effect_thread = None
     stop_event = threading.Event()
 
@@ -187,10 +213,24 @@ def run_interactive(controller: DmxController) -> None:
         elif cmd == "effect" and len(parts) >= 2 and parts[1] in EFFECTS:
             stop_effect()
             name = parts[1]
-            color = tuple(int(x) for x in parts[2:5]) if len(parts) >= 5 else (255, 0, 0)
+            rest = parts[2:]
+            kwargs = {"color": (255, 0, 0)}
+            try:
+                if len(rest) == 1:
+                    kwargs["speed"] = float(rest[0])
+                elif len(rest) == 3:
+                    kwargs["color"] = tuple(int(x) for x in rest)
+                elif len(rest) == 4:
+                    kwargs["color"] = tuple(int(x) for x in rest[:3])
+                    kwargs["speed"] = float(rest[3])
+                elif len(rest) != 0:
+                    raise ValueError("użyj: effect NAZWA [R G B] [SPEED]")
+            except ValueError as e:
+                print(f"Błąd: {e}")
+                continue
             stop_event.clear()
             effect_thread = threading.Thread(
-                target=EFFECTS[name], args=(controller, stop_event), kwargs={"color": color}, daemon=True)
+                target=EFFECTS[name], args=(controller, stop_event), kwargs=kwargs, daemon=True)
             effect_thread.start()
         else:
             print("Nieznana komenda.")
@@ -228,6 +268,8 @@ def main() -> None:
     effect_parser.add_argument("name", choices=sorted(EFFECTS))
     effect_parser.add_argument("color", type=int, nargs="*", metavar="R G B",
                                 help="kolor dla chase/pulse, domyślnie 255 0 0")
+    effect_parser.add_argument("--speed", type=float, default=None,
+                                help="opóźnienie między krokami efektu w sekundach (mniej = szybciej)")
 
     args = parser.parse_args()
 
@@ -250,9 +292,12 @@ def main() -> None:
             controller.send_dmx(parse_channel_assignments(args.assignments))
         elif args.command == "effect":
             color = tuple(args.color) if len(args.color) == 3 else (255, 0, 0)
+            kwargs = {"color": color}
+            if args.speed is not None:
+                kwargs["speed"] = args.speed
             print(f"Uruchomiono efekt '{args.name}'. Ctrl+C aby zatrzymać.")
             try:
-                EFFECTS[args.name](controller, threading.Event(), color=color)
+                EFFECTS[args.name](controller, threading.Event(), **kwargs)
             except KeyboardInterrupt:
                 controller.blackout()
     except ValueError as e:

@@ -35,14 +35,14 @@ def stop_effect() -> None:
             effect_stop_event = None
 
 
-def start_effect(name: str, color: tuple[int, int, int]) -> None:
+def start_effect(name: str, kwargs: dict) -> None:
     global effect_thread, effect_stop_event
     stop_effect()
     with state_lock:
         effect_stop_event = threading.Event()
         effect_thread = threading.Thread(
             target=EFFECTS[name], args=(controller, effect_stop_event),
-            kwargs={"color": color}, daemon=True)
+            kwargs=kwargs, daemon=True)
         effect_thread.start()
 
 
@@ -62,12 +62,21 @@ PAGE = """<!doctype html>
            background: #333; color: #eee; cursor: pointer; }
   button:hover { background: #444; }
   #note { max-width: 320px; margin-top: 1rem; font-size: 0.8rem; color: #888; text-align: center; }
+  .tempo { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; }
+  .tempo input { width: 200px; }
+  .segments { margin-top: 1.5rem; text-align: center; }
+  .segment-row { display: flex; gap: 0.4rem; justify-content: center; margin-top: 0.5rem; }
+  .segment-row input[type=color] { width: 32px; height: 32px; border: none; padding: 0; background: none; }
 </style>
 </head>
 <body>
 <h1>Sterowanie ledbarem</h1>
 <canvas id="wheel" width="300" height="300"></canvas>
 <div id="status">Wybierz kolor</div>
+<div class="tempo">
+  <label for="tempo">Tempo</label>
+  <input type="range" id="tempo" min="1" max="100" value="50">
+</div>
 <div class="buttons">
   <button id="rainbow">🌈 Tęcza</button>
   <button id="chase">🏃 Pościg</button>
@@ -75,13 +84,21 @@ PAGE = """<!doctype html>
   <button id="stop">⏹ Stop</button>
   <button id="blackout">⚫ Blackout</button>
 </div>
-<div id="note">"Tęcza" i "Pościg" wymagają trybu 24-kanałowego ustawionego na wyświetlaczu ledbara.</div>
+<div id="note">"Tęcza" i "Pościg" działają per-segment i wymagają trybu 24-kanałowego ustawionego na wyświetlaczu ledbara.</div>
+<div id="segments" class="segments"></div>
 <script>
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('status');
 const radius = canvas.width / 2;
 let lastColor = {r: 255, g: 0, b: 0};
+let currentEffect = null;
+let tempo = 50;
+
+function tempoToSpeed(t) {
+  // suwak 1 (wolno) .. 100 (szybko) -> opóźnienie między krokami efektu w sekundach
+  return 0.55 - (t / 100) * 0.53;
+}
 
 function hsvToRgb(h, s, v) {
   const c = v * s;
@@ -136,6 +153,7 @@ async function pickColor(evt) {
   if (Math.sqrt(dx * dx + dy * dy) > radius) return;
   const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
   lastColor = {r, g, b};
+  currentEffect = null;
   status.textContent = `RGB(${r}, ${g}, ${b})`;
   status.style.color = `rgb(${r},${g},${b})`;
   await post('/api/color', lastColor);
@@ -144,28 +162,70 @@ async function pickColor(evt) {
 canvas.addEventListener('click', pickColor);
 canvas.addEventListener('touchstart', (e) => { e.preventDefault(); pickColor(e); });
 
-document.getElementById('rainbow').addEventListener('click', () => {
-  status.textContent = 'Efekt: tęcza';
-  post('/api/effect', {name: 'rainbow'});
-});
-document.getElementById('chase').addEventListener('click', () => {
-  status.textContent = 'Efekt: pościg';
-  post('/api/effect', {name: 'chase', ...lastColor});
-});
-document.getElementById('pulse').addEventListener('click', () => {
-  status.textContent = 'Efekt: puls';
-  post('/api/effect', {name: 'pulse', ...lastColor});
-});
+function startEffect(name, labelText) {
+  currentEffect = name;
+  status.textContent = labelText;
+  post('/api/effect', {name, speed: tempoToSpeed(tempo), ...lastColor});
+}
+
+document.getElementById('rainbow').addEventListener('click', () => startEffect('rainbow', 'Efekt: tęcza'));
+document.getElementById('chase').addEventListener('click', () => startEffect('chase', 'Efekt: pościg'));
+document.getElementById('pulse').addEventListener('click', () => startEffect('pulse', 'Efekt: puls'));
+
 document.getElementById('stop').addEventListener('click', () => {
+  currentEffect = null;
   status.textContent = 'Zatrzymano efekt';
   post('/api/stop');
 });
 document.getElementById('blackout').addEventListener('click', () => {
+  currentEffect = null;
   status.textContent = 'Blackout';
   post('/api/blackout');
 });
 
+const tempoInput = document.getElementById('tempo');
+tempoInput.addEventListener('input', (e) => { tempo = +e.target.value; });
+tempoInput.addEventListener('change', () => {
+  if (currentEffect) {
+    post('/api/effect', {name: currentEffect, speed: tempoToSpeed(tempo), ...lastColor});
+  }
+});
+
+async function loadSegments() {
+  const cfg = await (await fetch('/api/config')).json();
+  const container = document.getElementById('segments');
+  if (cfg.segments <= 1) {
+    container.textContent = 'Kontrola pojedynczych segmentów wymaga trybu 24-kanałowego (uruchom web.py --channels 24).';
+    return;
+  }
+  const title = document.createElement('div');
+  title.textContent = 'Segmenty:';
+  container.appendChild(title);
+  const row = document.createElement('div');
+  row.className = 'segment-row';
+  for (let i = 1; i <= cfg.segments; i++) {
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = '#ff0000';
+    input.title = `Segment ${i}`;
+    input.addEventListener('input', () => {
+      currentEffect = null;
+      const hex = input.value;
+      const segColor = {
+        r: parseInt(hex.slice(1, 3), 16),
+        g: parseInt(hex.slice(3, 5), 16),
+        b: parseInt(hex.slice(5, 7), 16),
+      };
+      status.textContent = `Segment ${i}: RGB(${segColor.r}, ${segColor.g}, ${segColor.b})`;
+      post('/api/segment', {segment: i, ...segColor});
+    });
+    row.appendChild(input);
+  }
+  container.appendChild(row);
+}
+
 drawWheel();
+loadSegments();
 </script>
 </body>
 </html>
@@ -178,6 +238,16 @@ class Handler(BaseHTTPRequestHandler):
             body = PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/api/config":
+            body = json.dumps({
+                "channels": controller.num_channels,
+                "segments": max(1, controller.num_channels // 3),
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -224,10 +294,31 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 color = (int(data.get("r", 255)), int(data.get("g", 0)), int(data.get("b", 0)))
+                kwargs = {"color": color}
+                if "speed" in data:
+                    kwargs["speed"] = float(data["speed"])
             except ValueError:
-                self.send_error(400, "Nieprawidłowy kolor")
+                self.send_error(400, "Nieprawidłowy kolor lub tempo")
                 return
-            start_effect(name, color)
+            start_effect(name, kwargs)
+            self._no_content()
+
+        elif self.path == "/api/segment":
+            data = self._read_json()
+            if data is None:
+                return
+            try:
+                segment = int(data["segment"])
+                r, g, b = int(data["r"]), int(data["g"]), int(data["b"])
+            except (KeyError, ValueError):
+                self.send_error(400, "Nieprawidłowe dane segmentu")
+                return
+            stop_effect()
+            try:
+                controller.set_segment_color(segment, r, g, b)
+            except ValueError as e:
+                self.send_error(400, str(e))
+                return
             self._no_content()
 
         elif self.path == "/api/stop":
