@@ -32,10 +32,13 @@ Minimalny zakres (v1):
 - Blackout (wyzerowanie wszystkich kanałów)
 - Ustawienie koloru RGB na ledbarze (funkcja wysokopoziomowa, np. `set_color(r, g, b)`, mapująca na konkretne kanały startowe fixture)
 
+Zaimplementowane ponad v1:
+- Sterowanie per-segment w trybie 24-kanałowym (`set_segment_color`) i efekty działające na segmentach: `rainbow` (tęczowy chase), `chase` (pościg pojedynczego koloru), `pulse` (pulsowanie jasności, działa w każdym trybie) — patrz `dmx_control.py`, komendy `segment`/`effect`
+- Prosty serwis WWW (`web.py`, biblioteka standardowa, bez zależności pip) z kołem kolorów (canvas HSV) i przyciskami efektów
+
 Do rozważenia w kolejnych iteracjach (nie wymagane teraz):
-- Płynne przejścia/fade między kolorami
+- Płynne przejścia/fade między dowolnymi kolorami (nie tylko pulsowanie jasności)
 - Predefiniowane sceny/presety
-- Prosty interfejs sterowania (CLI interaktywne, terminal UI, albo lekki webowy)
 - Reakcja na dźwięk/muzykę (wspomniane wcześniej jako pomysł, nieprecyzowane)
 
 ## Wymagania techniczne

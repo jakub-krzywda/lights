@@ -1,21 +1,50 @@
 #!/usr/bin/env python3
-"""Prosty serwis WWW z kołem kolorów do sterowania ledbarem przez DMX/OLA.
+"""Prosty serwis WWW z kołem kolorów i efektami do sterowania ledbarem przez DMX/OLA.
 
 Uruchamiane lokalnie na Raspberry Pi: python3 web.py
 Otwórz w przeglądarce: http://<adres-rpi>:8080/
+
+Efekty 'rainbow' i 'chase' działają per-segment i wymagają ustawienia
+ledbara w trybie 24-kanałowym na jego wyświetlaczu (patrz README) oraz
+uruchomienia tego skryptu z --channels 24.
 """
 
+import argparse
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from dmx_control import DmxController
+from dmx_control import DEFAULT_NUM_CHANNELS, DEFAULT_START_CHANNEL, DEFAULT_UNIVERSE, DmxController, EFFECTS
 
 HOST = "0.0.0.0"
-PORT = 8080
+DEFAULT_PORT = 8080
 
-controller = DmxController()
-dmx_lock = threading.Lock()
+controller: DmxController
+state_lock = threading.Lock()
+effect_thread = None
+effect_stop_event = None
+
+
+def stop_effect() -> None:
+    global effect_thread, effect_stop_event
+    with state_lock:
+        if effect_thread is not None:
+            effect_stop_event.set()
+            effect_thread.join()
+            effect_thread = None
+            effect_stop_event = None
+
+
+def start_effect(name: str, color: tuple[int, int, int]) -> None:
+    global effect_thread, effect_stop_event
+    stop_effect()
+    with state_lock:
+        effect_stop_event = threading.Event()
+        effect_thread = threading.Thread(
+            target=EFFECTS[name], args=(controller, effect_stop_event),
+            kwargs={"color": color}, daemon=True)
+        effect_thread.start()
+
 
 PAGE = """<!doctype html>
 <html lang="pl">
@@ -27,18 +56,32 @@ PAGE = """<!doctype html>
   body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center;
          background: #111; color: #eee; margin: 0; padding: 2rem; }
   canvas { border-radius: 50%; cursor: crosshair; touch-action: none; }
-  #status { margin-top: 1rem; font-size: 1rem; }
+  #status { margin: 1rem 0; font-size: 1rem; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; max-width: 320px; }
+  button { font-size: 1rem; padding: 0.6rem 1rem; border: none; border-radius: 8px;
+           background: #333; color: #eee; cursor: pointer; }
+  button:hover { background: #444; }
+  #note { max-width: 320px; margin-top: 1rem; font-size: 0.8rem; color: #888; text-align: center; }
 </style>
 </head>
 <body>
-<h1>Kolor ledbara</h1>
+<h1>Sterowanie ledbarem</h1>
 <canvas id="wheel" width="300" height="300"></canvas>
 <div id="status">Wybierz kolor</div>
+<div class="buttons">
+  <button id="rainbow">🌈 Tęcza</button>
+  <button id="chase">🏃 Pościg</button>
+  <button id="pulse">💓 Puls</button>
+  <button id="stop">⏹ Stop</button>
+  <button id="blackout">⚫ Blackout</button>
+</div>
+<div id="note">"Tęcza" i "Pościg" wymagają trybu 24-kanałowego ustawionego na wyświetlaczu ledbara.</div>
 <script>
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('status');
 const radius = canvas.width / 2;
+let lastColor = {r: 255, g: 0, b: 0};
 
 function hsvToRgb(h, s, v) {
   const c = v * s;
@@ -72,6 +115,18 @@ function drawWheel() {
   ctx.putImageData(image, 0, 0);
 }
 
+async function post(path, body) {
+  try {
+    await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    status.textContent = 'Błąd połączenia z serwerem';
+  }
+}
+
 async function pickColor(evt) {
   const rect = canvas.getBoundingClientRect();
   const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
@@ -80,21 +135,36 @@ async function pickColor(evt) {
   const dx = x - radius, dy = y - radius;
   if (Math.sqrt(dx * dx + dy * dy) > radius) return;
   const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+  lastColor = {r, g, b};
   status.textContent = `RGB(${r}, ${g}, ${b})`;
   status.style.color = `rgb(${r},${g},${b})`;
-  try {
-    await fetch('/api/color', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({r, g, b}),
-    });
-  } catch (e) {
-    status.textContent = 'Błąd połączenia z serwerem';
-  }
+  await post('/api/color', lastColor);
 }
 
 canvas.addEventListener('click', pickColor);
 canvas.addEventListener('touchstart', (e) => { e.preventDefault(); pickColor(e); });
+
+document.getElementById('rainbow').addEventListener('click', () => {
+  status.textContent = 'Efekt: tęcza';
+  post('/api/effect', {name: 'rainbow'});
+});
+document.getElementById('chase').addEventListener('click', () => {
+  status.textContent = 'Efekt: pościg';
+  post('/api/effect', {name: 'chase', ...lastColor});
+});
+document.getElementById('pulse').addEventListener('click', () => {
+  status.textContent = 'Efekt: puls';
+  post('/api/effect', {name: 'pulse', ...lastColor});
+});
+document.getElementById('stop').addEventListener('click', () => {
+  status.textContent = 'Zatrzymano efekt';
+  post('/api/stop');
+});
+document.getElementById('blackout').addEventListener('click', () => {
+  status.textContent = 'Blackout';
+  post('/api/blackout');
+});
+
 drawWheel();
 </script>
 </body>
@@ -114,33 +184,83 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_POST(self):
-        if self.path != "/api/color":
-            self.send_error(404)
-            return
-
+    def _read_json(self) -> dict | None:
         length = int(self.headers.get("Content-Length", 0))
         try:
-            data = json.loads(self.rfile.read(length))
-            r, g, b = int(data["r"]), int(data["g"]), int(data["b"])
-        except (ValueError, KeyError, json.JSONDecodeError):
-            self.send_error(400, "Nieprawidłowe dane koloru")
-            return
+            return json.loads(self.rfile.read(length)) if length else {}
+        except json.JSONDecodeError:
+            self.send_error(400, "Nieprawidłowy JSON")
+            return None
 
-        try:
-            with dmx_lock:
-                controller.set_color(r, g, b)
-        except ValueError as e:
-            self.send_error(400, str(e))
-            return
-
+    def _no_content(self) -> None:
         self.send_response(204)
         self.end_headers()
 
+    def do_POST(self):
+        if self.path == "/api/color":
+            data = self._read_json()
+            if data is None:
+                return
+            try:
+                r, g, b = int(data["r"]), int(data["g"]), int(data["b"])
+            except (KeyError, ValueError):
+                self.send_error(400, "Nieprawidłowe dane koloru")
+                return
+            stop_effect()
+            try:
+                controller.set_color(r, g, b)
+            except ValueError as e:
+                self.send_error(400, str(e))
+                return
+            self._no_content()
+
+        elif self.path == "/api/effect":
+            data = self._read_json()
+            if data is None:
+                return
+            name = data.get("name")
+            if name not in EFFECTS:
+                self.send_error(400, "Nieznany efekt")
+                return
+            try:
+                color = (int(data.get("r", 255)), int(data.get("g", 0)), int(data.get("b", 0)))
+            except ValueError:
+                self.send_error(400, "Nieprawidłowy kolor")
+                return
+            start_effect(name, color)
+            self._no_content()
+
+        elif self.path == "/api/stop":
+            stop_effect()
+            self._no_content()
+
+        elif self.path == "/api/blackout":
+            stop_effect()
+            controller.blackout()
+            self._no_content()
+
+        else:
+            self.send_error(404)
+
 
 def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Serwis działa na http://{HOST}:{PORT}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--universe", type=int, default=DEFAULT_UNIVERSE)
+    parser.add_argument("--start-channel", type=int, default=DEFAULT_START_CHANNEL)
+    parser.add_argument("--channels", type=int, default=DEFAULT_NUM_CHANNELS,
+                         help="liczba kanałów fixture ustawiona na urządzeniu: 3 lub 24")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = parser.parse_args()
+
+    global controller
+    controller = DmxController(
+        universe=args.universe,
+        start_channel=args.start_channel,
+        num_channels=args.channels,
+    )
+
+    server = ThreadingHTTPServer((HOST, args.port), Handler)
+    print(f"Serwis działa na http://{HOST}:{args.port} (tryb {args.channels}ch)")
     server.serve_forever()
 
 
