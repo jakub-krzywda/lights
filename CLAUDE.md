@@ -8,7 +8,7 @@ Python script controlling a DMX512 RGB ledbar from a Raspberry Pi 3, via OLA (Op
 
 Hardware chain (already working, not something to debug): RPi → USB → uDMX interface (anyma.ch, `16c0:05dc`) → DMX512 → ledbar. OLA is installed on the RPi with the `usbdmx` plugin active, universe 1 patched to the Anyma USB device.
 
-This code only runs meaningfully on the target Raspberry Pi with `python3-ola` installed (`sudo apt install python3-ola` — a system package, not pip-installable). It cannot be executed or integration-tested from a dev machine; changes can only be syntax-checked (`python3 -m py_compile dmx_control.py`) until run on-device.
+This code only runs meaningfully on the target Raspberry Pi with `ola-python` installed (`sudo apt install ola-python` — a system package, not pip-installable; despite common online references, the package is *not* named `python3-ola` in Debian). It cannot be executed or integration-tested from a dev machine; changes can only be syntax-checked (`python3 -m py_compile dmx_control.py`) until run on-device.
 
 ## Running
 

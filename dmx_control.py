@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Sterowanie ledbarem RGB przez lokalne API OLA (uDMX), uniwersum DMX 1.
 
-Uruchamiane lokalnie na Raspberry Pi, wymaga zainstalowanego python3-ola
-(sudo apt install python3-ola).
+Uruchamiane lokalnie na Raspberry Pi, wymaga zainstalowanego ola-python
+(sudo apt install ola-python).
 """
 
 import argparse
 import sys
+from array import array
 
 from ola.ClientWrapper import ClientWrapper
 
@@ -37,7 +38,7 @@ class DmxController:
             if not 0 <= value <= 255:
                 raise ValueError(f"wartość poza zakresem 0-255: {value}")
 
-        data = bytearray(max(channels))
+        data = array('B', [0] * max(channels))
         for channel, value in channels.items():
             data[channel - 1] = value
 

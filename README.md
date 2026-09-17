@@ -18,7 +18,7 @@ Skrypt Python działający **lokalnie na RPi**, sterujący ledbarem przez lokaln
 ## Środowisko docelowe
 
 - Raspberry Pi 3, Raspbian/Debian
-- OLA + `python3-ola` zainstalowane (`sudo apt install python3-ola`)
+- OLA + `ola-python` zainstalowane (`sudo apt install ola-python`) — pakiet `python3-ola` nie istnieje w Debianie, właściwa nazwa to `ola-python`
 - Universe DMX: **1**
 - Fixture: ledbar RGB, adres startowy DMX = kanał 1 (do potwierdzenia — sprawdzić fizyczne dip-switche/ustawienia na ledbarze), 3 kanały (R, G, B) — **do zweryfikowania z instrukcją ledbara**, może mieć więcej kanałów (np. dimmer, strobe, tryby)
 
@@ -38,7 +38,7 @@ Do rozważenia w kolejnych iteracjach (nie wymagane teraz):
 ## Wymagania techniczne
 
 - Python 3 (wersja zgodna z tym, co jest na RPi — sprawdzić `python3 --version`)
-- Biblioteka: `python3-ola` (pakiet systemowy, nie pip)
+- Biblioteka: `ola-python` (pakiet systemowy, nie pip)
 - Kod ma działać jako skrypt uruchamiany lokalnie na RPi (SSH albo bezpośrednio)
 
 ## Znane ograniczenia / uwagi
