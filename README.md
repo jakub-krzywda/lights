@@ -2,7 +2,7 @@
 
 ## Kontekst
 
-Raspberry Pi 3 z podłączonym interfejsem USB-DMX **uDMX** (anyma.ch, vendor:product `16c0:05dc`), sterującym ledbarem (fixture typu "Generic RGB Panel") przez DMX512.
+Raspberry Pi 3 z podłączonym interfejsem USB-DMX **uDMX** (anyma.ch, vendor:product `16c0:05dc`), sterującym ledbarem [Fun Generation LED BARbara 24](https://www.thomann.pl/fun_generation_led_barbara_24.htm) (24 LED RGB w 8 segmentach) przez DMX512.
 
 Warstwa sieciowa/bridge (OLA + Art-Net) jest już skonfigurowana i przetestowana:
 - OLA (Open Lighting Architecture) zainstalowane na RPi, plugin `usbdmx` aktywny
@@ -20,7 +20,10 @@ Skrypt Python działający **lokalnie na RPi**, sterujący ledbarem przez lokaln
 - Raspberry Pi 3, Raspbian/Debian
 - OLA + `ola-python` zainstalowane (`sudo apt install ola-python`) — pakiet `python3-ola` nie istnieje w Debianie, właściwa nazwa to `ola-python`
 - Universe DMX: **1**
-- Fixture: ledbar RGB, adres startowy DMX = kanał 1 (do potwierdzenia — sprawdzić fizyczne dip-switche/ustawienia na ledbarze), 3 kanały (R, G, B) — **do zweryfikowania z instrukcją ledbara**, może mieć więcej kanałów (np. dimmer, strobe, tryby)
+- Fixture: Fun Generation LED BARbara 24. Adres DMX i tryb kanałów ustawia się w menu na wyświetlaczu urządzenia (przyciski MODE/SETUP/UP/DOWN), **nie dip-switchami**. Urządzenie wspiera 4 tryby: 2/3/5/24-kanałowy (patrz instrukcja producenta, rozdział 7.4–7.7). Skonfigurowano: **adres startowy 1, tryb 3-kanałowy (`3-ch`)**:
+  - kanał 1 = R, kanał 2 = G, kanał 3 = B (intensywność 0–255)
+  - tryb 5-ch dodaje kanał 4 = dimmer (musi być >0, inaczej nic nie widać) i kanał 5 = strobe
+  - tryb 24-ch daje osobną kontrolę R/G/B dla każdego z 8 segmentów (kanały 1-24)
 
 ## Funkcjonalność (do ustalenia poziom pierwszej iteracji)
 
@@ -44,13 +47,13 @@ Do rozważenia w kolejnych iteracjach (nie wymagane teraz):
 ## Znane ograniczenia / uwagi
 
 - `ClientWrapper` z OLA korzysta z pętli zdarzeń (`wrapper.Run()`) — trzeba to wziąć pod uwagę projektując interfejs (np. jednorazowe wysłanie vs. pętla ciągła/interaktywna)
-- Adres DMX ledbara (kanał startowy) nie został jeszcze jawnie potwierdzony — pierwszy krok w Claude Code: zweryfikować to fizycznie na urządzeniu, zanim napisze się `set_color()`
-- Liczba kanałów ledbara (czy to tylko RGB, czy więcej — np. RGBW, dimmer) — do sprawdzenia w dokumentacji/etykiecie urządzenia
+- `OlaClient.SendDmx` oczekuje `array.array('B', ...)`, nie `bytearray` (woła wewnętrznie `.tobytes()`)
+- Ledbar nie może być podłączony za dimmerem (info z instrukcji producenta) — zasilanie musi iść bezpośrednio z sieci
 
-## Otwarte pytania do ustalenia podczas pracy nad skryptem
+## Status otwartych pytań
 
-1. Ile kanałów ma ledbar i co robi każdy z nich (R/G/B/dimmer/strobe/tryb)?
-2. Jaki jest adres startowy DMX ustawiony fizycznie na ledbarze?
-3. Czy skrypt ma działać jednorazowo (ustaw i wyjdź) czy jako długo działający proces (np. z interaktywnym sterowaniem)?
-4. Czy w pierwszej iteracji wystarczy CLI, czy od razu potrzebny jakiś prosty UI?
+1. ~~Ile kanałów ma ledbar i co robi każdy z nich~~ — rozstrzygnięte, patrz "Środowisko docelowe" i instrukcja producenta (rozdz. 7.4–7.7).
+2. ~~Jaki jest adres startowy DMX~~ — ustawiony na urządzeniu na `d001` (kanał 1), tryb `3-ch`.
+3. Czy skrypt ma działać jednorazowo czy jako długo działający proces — zaimplementowano oba warianty (`color`/`blackout` jednorazowo, `interactive` jako pętla).
+4. Czy w pierwszej iteracji wystarczy CLI — tak, zaimplementowano CLI (`dmx_control.py`).
 </file_text>

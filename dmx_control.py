@@ -64,8 +64,17 @@ class DmxController:
         })
 
 
+def parse_channel_assignments(assignments: list[str]) -> dict[int, int]:
+    """Parsuje ['1=255', '2=0'] na {1: 255, 2: 0}."""
+    channels = {}
+    for assignment in assignments:
+        channel_str, _, value_str = assignment.partition("=")
+        channels[int(channel_str)] = int(value_str)
+    return channels
+
+
 def run_interactive(controller: DmxController) -> None:
-    print("Tryb interaktywny. Komendy: 'color R G B', 'blackout', 'exit'.")
+    print("Tryb interaktywny. Komendy: 'color R G B', 'raw CH=VAL ...', 'blackout', 'exit'.")
     while True:
         try:
             line = input("> ").strip()
@@ -86,8 +95,13 @@ def run_interactive(controller: DmxController) -> None:
                 controller.set_color(r, g, b)
             except ValueError as e:
                 print(f"Błąd: {e}")
+        elif cmd == "raw" and len(parts) > 1:
+            try:
+                controller.send_dmx(parse_channel_assignments(parts[1:]))
+            except ValueError as e:
+                print(f"Błąd: {e}")
         else:
-            print("Nieznana komenda. Użyj: 'color R G B', 'blackout', 'exit'.")
+            print("Nieznana komenda. Użyj: 'color R G B', 'raw CH=VAL ...', 'blackout', 'exit'.")
 
 
 def main() -> None:
@@ -107,6 +121,10 @@ def main() -> None:
     subparsers.add_parser("blackout", help="wyzeruj kanały i zakończ")
     subparsers.add_parser("interactive", help="uruchom tryb interaktywny (CLI)")
 
+    raw_parser = subparsers.add_parser(
+        "raw", help="ustaw dowolne kanały wprost, np. 'raw 1=255 2=0 3=0' (do wykrywania układu kanałów fixture)")
+    raw_parser.add_argument("assignments", nargs="+", metavar="CH=VAL")
+
     args = parser.parse_args()
 
     controller = DmxController(
@@ -122,6 +140,8 @@ def main() -> None:
             controller.blackout()
         elif args.command == "interactive":
             run_interactive(controller)
+        elif args.command == "raw":
+            controller.send_dmx(parse_channel_assignments(args.assignments))
     except ValueError as e:
         print(f"Błąd: {e}", file=sys.stderr)
         sys.exit(1)
