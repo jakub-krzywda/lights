@@ -1,0 +1,5 @@
+# Brak zależności instalowanych przez pip.
+#
+# Jedyna zależność to biblioteka OLA, dostępna wyłącznie jako pakiet
+# systemowy (nie na PyPI). Zainstaluj ją na Raspberry Pi przez:
+#   sudo apt install ola-python
